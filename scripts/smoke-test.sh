@@ -1633,41 +1633,32 @@ rm -f "$UI_INPUT"
 
 echo ""
 echo "=== Phase 16: stdio server leaves no orphan after shutdown ==="
-# Regression guard for the orphaned-server failure mode behind #406: a running
-# stdio MCP server must TERMINATE (not linger as a background process) once its
-# stdin closes. POSIX-only — Windows handles parent death via job objects and
-# mkfifo is unavailable on the MSYS2 shell.
-SHUT_FIFO="$TMPDIR/shutdown_stdin"
-if mkfifo "$SHUT_FIFO" 2>/dev/null; then
-  # Hold the FIFO's write end open with a slow writer so the server keeps
-  # running (blocked on stdin); killing the writer sends EOF → shutdown.
-  sleep 60 > "$SHUT_FIFO" &
-  SHUT_HOLDER_PID=$!
-  "$BINARY" < "$SHUT_FIFO" > /dev/null 2>&1 &
-  SHUT_SRV_PID=$!
-  sleep 1
-  if ! kill -0 "$SHUT_SRV_PID" 2>/dev/null; then
-    echo "FAIL 16: stdio server did not stay up with stdin held open"
-    kill "$SHUT_HOLDER_PID" 2>/dev/null || true
-    exit 1
-  fi
-  echo "OK 16a: stdio server running (pid $SHUT_SRV_PID)"
-  kill "$SHUT_HOLDER_PID" 2>/dev/null || true  # close stdin → EOF → shutdown
-  SHUT_GONE=0
-  for _ in $(seq 1 60); do
-    if ! kill -0 "$SHUT_SRV_PID" 2>/dev/null; then SHUT_GONE=1; break; fi
-    sleep 0.1
-  done
-  if [ "$SHUT_GONE" -ne 1 ]; then
-    echo "FAIL 16: stdio server still running after stdin closed (orphan process)"
-    kill -9 "$SHUT_SRV_PID" 2>/dev/null || true
-    exit 1
-  fi
+# Regression guard for the orphaned-server failure mode behind #406: a stdio MCP
+# server must TERMINATE (not linger as a background process) once its stdin is
+# closed. The shutdown trigger is a closed stdin (`< /dev/null`): the server sees
+# an immediate, regular EOF on its read loop and exits.
+#
+# Why not a FIFO writer-close (the previous mechanism)? Closing a FIFO's last
+# writer surfaces as POLLHUP rather than a clean POLLIN+EOF; the server's
+# poll()-based read loop did not treat that as shutdown, so the FIFO probe left
+# the process alive and Phase 16 failed in CI on every platform. A plain
+# `< /dev/null` EOF is the simplest reliable trigger and is fully portable
+# (POSIX shells and MSYS2 bash alike), so no OS gate is needed here.
+"$BINARY" < /dev/null > /dev/null 2>&1 &
+SHUT_SRV_PID=$!
+SHUT_GONE=0
+for _ in $(seq 1 60); do            # bounded ~6s wait (60 × 0.1s)
+  if ! kill -0 "$SHUT_SRV_PID" 2>/dev/null; then SHUT_GONE=1; break; fi
+  sleep 0.1
+done
+if [ "$SHUT_GONE" -ne 1 ]; then
+  echo "FAIL 16: stdio server still running after stdin closed (orphan process)"
+  kill -9 "$SHUT_SRV_PID" 2>/dev/null || true
   wait "$SHUT_SRV_PID" 2>/dev/null || true
-  echo "OK 16b: stdio server terminated after shutdown, no orphan"
-else
-  echo "SKIP Phase 16: mkfifo unavailable (non-POSIX shell)"
+  exit 1
 fi
+wait "$SHUT_SRV_PID" 2>/dev/null || true
+echo "OK 16: stdio server terminated after stdin closed, no orphan"
 
 echo ""
 echo "=== smoke-test: ALL PASSED ==="
