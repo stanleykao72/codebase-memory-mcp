@@ -641,11 +641,21 @@ static char *extract_dart_callee(CBMArena *a, TSNode node, const char *source, c
 // SCSS: an `@include foo;` is an include_statement whose callee is its
 // `identifier` child (the mixin name).
 static char *extract_scss_callee(CBMArena *a, TSNode node, const char *source, const char *nk) {
-    if (strcmp(nk, "include_statement") != 0) {
-        return NULL;
+    if (strcmp(nk, "include_statement") == 0) {
+        TSNode id = cbm_find_child_by_kind(node, "identifier");
+        return ts_node_is_null(id) ? NULL : cbm_node_text(a, id, source);
     }
-    TSNode id = cbm_find_child_by_kind(node, "identifier");
-    return ts_node_is_null(id) ? NULL : cbm_node_text(a, id, source);
+    /* SCSS @function call `double($x)` is a call_expression whose callee is a
+     * `function_name` child (there is no `function` field), so the generic
+     * field-based resolver returns NULL and the call is dropped — no CALLS edge
+     * to the in-file @function. */
+    if (strcmp(nk, "call_expression") == 0) {
+        TSNode fn = cbm_find_child_by_kind(node, "function_name");
+        if (!ts_node_is_null(fn)) {
+            return cbm_node_text(a, fn, source);
+        }
+    }
+    return NULL;
 }
 
 // SQL: an `invocation` node's callee is nested object_reference > `name` field
