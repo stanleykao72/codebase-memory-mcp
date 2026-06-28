@@ -3,6 +3,7 @@
 
 #include "type_rep.h"
 #include "../arena.h"
+#include <stdbool.h>
 
 // Decorator-derived flags (Python). Added at struct tail so existing
 // callers that memset to zero before populating other fields keep working.
@@ -99,6 +100,16 @@ typedef struct CBMTypeRegistry {
     CBMRegistryHashEntry *method_entries;
     int method_bucket_count;
     int method_entry_count;
+
+    /* Sealed / read-only. Set true by the cbm_X_build_cross_registry builders
+     * (c/cpp, python, c#, ts, go) right after finalize: a Tier-2 cross-registry
+     * is built ONCE and shared READ-ONLY across the parallel resolve workers.
+     * cbm_registry_add_func/_type no-op on a sealed registry, so a per-file
+     * resolver can never mutate the shared, finalized registry. Without this,
+     * post-finalize adds accumulate in a tail the hash index does not cover ->
+     * every lookup linear-scans it -> O(files*defs) (the Linux-kernel full-index
+     * hang) plus a heap data race across workers. */
+    bool read_only;
 } CBMTypeRegistry;
 
 // Initialize a registry.

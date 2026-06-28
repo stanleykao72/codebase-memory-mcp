@@ -4432,8 +4432,15 @@ static void c_process_body_child(CLSPContext *ctx, TSNode child) {
                                     !strstr(func_qn, ctx->current_namespace))
                                     func_qn = cbm_arena_sprintf(ctx->arena, "%s.%s",
                                                                 ctx->current_namespace, fname);
-                                // Only register if not already registered
-                                if (!cbm_registry_lookup_func(ctx->registry, func_qn)) {
+                                // Only register if not already registered. On the
+                                // shared Tier-2 registry, skip entirely: it is
+                                // finalized + read-only, the def is already present
+                                // from the project-wide build, and the lookup + add
+                                // would otherwise hit/grow the post-finalize tail ->
+                                // O(files*defs) on large C codebases (the Linux-kernel
+                                // full-index hang) plus a cross-worker heap race.
+                                if (!ctx->registry_shared &&
+                                    !cbm_registry_lookup_func(ctx->registry, func_qn)) {
                                     const CBMType **rets = (const CBMType **)cbm_arena_alloc(
                                         ctx->arena, 2 * sizeof(const CBMType *));
                                     rets[0] = ret_type;
@@ -5315,6 +5322,7 @@ CBMTypeRegistry *cbm_c_build_cross_registry(CBMArena *arena, CBMLSPDef *defs, in
         c_register_lsp_defs(arena, reg, "", d, 1);
     }
     cbm_registry_finalize(reg);
+    reg->read_only = true; /* seal: shared Tier-2 registry is read-only during resolve */
     return reg;
 }
 
