@@ -130,16 +130,20 @@ class Suite:
                     json.dumps(rows)[:160])
 
     def check_C_view_inherit(self):
-        """C: inherited view linked to its parent view (inherit_id)."""
-        r = self.query("MATCH (a)-[:EXTENDS|INHERITS]->(b) WHERE a.name CONTAINS 'inherit' RETURN a.name, b.name")
+        """C: inherited view linked to its parent view via EXTENDS (inherit_id)."""
+        r = self.query("MATCH (a)-[:EXTENDS]->(b) RETURN a.name, b.name")
         rows = r.get("rows", r.get("results", []))
-        self.record("C", "view inherit_id edge", "PASS" if rows else "PENDING", json.dumps(rows)[:120])
+        ok = any("view_library_book_form_inherit" in str(row) and "view_library_book_form" in str(row)
+                 for row in rows)
+        self.record("C", "view inherit_id → EXTENDS edge", "PASS" if ok else "PENDING",
+                    json.dumps(rows)[:160])
 
     def check_C_view_model_link(self):
-        """C: a view for model 'library.book' links to the library.book Model node."""
-        r = self.query("MATCH (v)-[:FOR_MODEL|REFERENCES]->(m) WHERE m.name = 'library.book' RETURN v.name")
+        """C: ir.ui.view records link to their Model node via FOR_MODEL (cross-layer)."""
+        r = self.query("MATCH (v)-[:FOR_MODEL]->(m) WHERE m.name = 'library.book' RETURN v.name")
         rows = r.get("rows", r.get("results", []))
-        self.record("C", "view->model cross-layer link", "PASS" if rows else "PENDING", json.dumps(rows)[:120])
+        self.record("C", "view → model cross-layer (FOR_MODEL)", "PASS" if rows else "PENDING",
+                    json.dumps(rows)[:160])
 
     def run(self, tier):
         checks = {

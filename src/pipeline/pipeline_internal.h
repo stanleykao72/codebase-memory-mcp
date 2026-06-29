@@ -530,6 +530,12 @@ int64_t cbm_odoo_ensure_model_node(cbm_gbuf_t *gb, const char *name);
 void cbm_odoo_ensure_models_for_def(cbm_gbuf_t *gb, const char *model_name,
                                     const char **inherit_list);
 
+/* ── Odoo view graph (pass_odoo_xml.c, Odoo fork Tier C) ──────────── */
+/* Scans ir.ui.view XML records → View nodes + FOR_MODEL (view->model) +
+ * EXTENDS (inherited view -> parent via inherit_id). Main-sequence pass. */
+int cbm_pipeline_pass_odoo_xml(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
+                               int file_count);
+
 /* ── Env URL scanner (pass_envscan.c) ────────────────────────────── */
 
 typedef struct {
