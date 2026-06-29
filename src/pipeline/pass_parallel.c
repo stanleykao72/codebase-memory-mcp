@@ -68,6 +68,7 @@ enum { PP_CSHARP_M_PREFIX_LEN = 2 };
 #include "foundation/profile.h"
 #include "foundation/compat_regex.h"
 #include "cbm.h"
+#include "discover/discover.h" /* cbm_language_for_filename (Odoo fork) */
 #include "simhash/minhash.h"
 #include "semantic/ast_profile.h"
 
@@ -838,7 +839,9 @@ static int register_and_link_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *d
     if (strcmp(def->label, "Function") == 0 || strcmp(def->label, "Method") == 0 ||
         cbm_label_is_type_like(def->label) || strcmp(def->label, "Variable") == 0 ||
         strcmp(def->label, "Field") == 0) {
-        cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label);
+        const char *dpath = def->file_path ? def->file_path : rel;
+        cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label,
+                         dpath ? (int)cbm_language_for_filename(dpath) : CBM_LANG_COUNT);
         (*reg_entries)++;
     }
     char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
@@ -1839,8 +1842,9 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
                 ws->lsp_overrides++;
             }
         } else {
-            res = cbm_registry_resolve(rc->registry, call->callee_name, module_qn, imp_keys,
-                                       imp_vals, imp_count);
+            /* Odoo fork: language-scoped to avoid cross-language false edges. */
+            res = cbm_registry_resolve_lang(rc->registry, call->callee_name, module_qn, imp_keys,
+                                            imp_vals, imp_count, (int)lang);
         }
         atomic_fetch_add_explicit(&rc->time_ns_rc_resolve, extract_now_ns() - _rc_t0,
                                   memory_order_relaxed);
