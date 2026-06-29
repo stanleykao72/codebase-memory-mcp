@@ -12,7 +12,7 @@
  */
 #include "foundation/constants.h"
 
-enum { CBM_DIR_PERMS = 0755, PL_RING = 4, PL_RING_MASK = 3, PL_SEQ_PASSES = 6, PL_WAL_BUF = 1040 };
+enum { CBM_DIR_PERMS = 0755, PL_RING = 4, PL_RING_MASK = 3, PL_SEQ_PASSES = 7, PL_WAL_BUF = 1040 };
 #define PL_NSEC_PER_SEC 1000000000LL
 #include "pipeline/pipeline.h"
 #include "pipeline/artifact.h"
@@ -622,6 +622,9 @@ static void predump_cfg(cbm_pipeline_ctx_t *ctx) {
 static void predump_complexity(cbm_pipeline_ctx_t *ctx) {
     cbm_pipeline_pass_complexity(ctx);
 }
+static void predump_odoo_model(cbm_pipeline_ctx_t *ctx) {
+    cbm_pipeline_pass_odoo_model(ctx); /* Odoo fork (Tier B) */
+}
 
 static void run_predump_passes(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
     static const struct {
@@ -632,8 +635,9 @@ static void run_predump_passes(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
         {predump_deco, "decorator_tags", false}, {predump_cfg, "configlink", false},
         {predump_route, "route_match", false},   {predump_sim, "similarity", true},
         {predump_sem, "semantic_edges", true},   {predump_complexity, "complexity", false},
+        {predump_odoo_model, "odoo_model", false},
     };
-    enum { PREDUMP_PASS_COUNT = 6 };
+    enum { PREDUMP_PASS_COUNT = 7 };
     struct timespec t;
     for (int i = 0; i < PREDUMP_PASS_COUNT && !check_cancel(p); i++) {
         /* "moderate_only" passes (similarity/semantic edges) run in FULL,
@@ -690,6 +694,7 @@ static int run_sequential_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
     } seq_passes[] = {
         {cbm_pipeline_pass_definitions, "definitions", false},
         {cbm_pipeline_pass_k8s, "k8s", true},
+        {cbm_pipeline_pass_odoo_xml, "odoo_xml", true}, /* Odoo fork (Tier C) */
         {seq_pass_lsp_cross_dispatch, "lsp_cross", true},
         {cbm_pipeline_pass_calls, "calls", false},
         {cbm_pipeline_pass_usages, "usages", false},
@@ -861,6 +866,10 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
     cbm_clock_gettime(CLOCK_MONOTONIC, t);
     cbm_pipeline_pass_k8s(ctx, files, file_count);
     cbm_log_info("pass.timing", "pass", "k8s", "elapsed_ms", itoa_buf((int)elapsed_ms(*t)));
+    /* Odoo fork (Tier C): view graph from ir.ui.view XML records. */
+    cbm_clock_gettime(CLOCK_MONOTONIC, t);
+    cbm_pipeline_pass_odoo_xml(ctx, files, file_count);
+    cbm_log_info("pass.timing", "pass", "odoo_xml", "elapsed_ms", itoa_buf((int)elapsed_ms(*t)));
     return check_cancel(p) ? CBM_NOT_FOUND : 0;
 }
 

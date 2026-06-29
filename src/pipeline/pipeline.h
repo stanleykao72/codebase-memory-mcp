@@ -142,9 +142,12 @@ typedef struct {
 cbm_registry_t *cbm_registry_new(void);
 void cbm_registry_free(cbm_registry_t *r);
 
-/* Register a function/method/class. All strings are copied. */
+/* Register a function/method/class. All strings are copied.
+ * `lang` is the CBMLanguage of the defining file (cast to int to avoid pulling
+ * cbm.h into this header); pass CBM_LANG_COUNT when unknown. Odoo fork: recorded
+ * so cbm_registry_resolve_lang can drop cross-language candidates. */
 void cbm_registry_add(cbm_registry_t *r, const char *name, const char *qualified_name,
-                      const char *label);
+                      const char *label, int lang);
 
 /* Resolve a callee name using prioritized strategies.
  * import_map: NULL-terminated array of {local_name, resolved_qn} pairs, or NULL.
@@ -152,6 +155,29 @@ void cbm_registry_add(cbm_registry_t *r, const char *name, const char *qualified
 cbm_resolution_t cbm_registry_resolve(const cbm_registry_t *r, const char *callee_name,
                                       const char *module_qn, const char **import_map_keys,
                                       const char **import_map_vals, int import_map_count);
+
+/* Odoo fork: like cbm_registry_resolve but scopes name-lookup candidates to
+ * caller_lang's language family (an int CBMLanguage; CBM_LANG_COUNT = no
+ * filter). Prevents e.g. a Python call resolving to a same-named JS/XML node. */
+cbm_resolution_t cbm_registry_resolve_lang(const cbm_registry_t *r, const char *callee_name,
+                                           const char *module_qn, const char **import_map_keys,
+                                           const char **import_map_vals, int import_map_count,
+                                           int caller_lang);
+
+/* Odoo fork (Tier B): record an Odoo model contributed by a Python class.
+ * model_name = value of _name (or NULL for a pure _inherit extension);
+ * class_qn = the class's qualified name; inherit_list = NULL-terminated parent
+ * model names from _inherit/_inherits (or NULL). Builds the model index used by
+ * cbm_registry_resolve_orm. Safe to call with all-NULL odoo attrs (no-op). */
+void cbm_registry_add_model(cbm_registry_t *r, const char *model_name, const char *class_qn,
+                            const char **inherit_list);
+
+/* Odoo fork (Tier B): resolve an ORM call `env['model_name'].method_name()` to
+ * the qualified name of the method defined on the model's class chain
+ * (model + its _inherit parents). Returns empty if no contributor class defines
+ * the method (e.g. base ORM verbs like search/write that live in odoo core). */
+cbm_resolution_t cbm_registry_resolve_orm(const cbm_registry_t *r, const char *model_name,
+                                          const char *method_name);
 
 /* Per-file memoization cache for is_import_reachable. Thread-local —
  * each resolve worker owns its own cache. Call _begin at the start

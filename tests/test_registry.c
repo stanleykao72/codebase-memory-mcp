@@ -6,6 +6,7 @@
  */
 #include "test_framework.h"
 #include "pipeline/pipeline.h"
+#include "cbm.h" /* CBM_LANG_COUNT (Odoo fork test) */
 
 #include <stdlib.h>
 #include <string.h>
@@ -191,7 +192,7 @@ TEST(registry_free_null) {
 
 TEST(registry_add_and_exists) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "main", "proj.cmd.main", "Function");
+    cbm_registry_add(r, "main", "proj.cmd.main", "Function", CBM_LANG_COUNT);
     ASSERT_EQ(cbm_registry_size(r), 1);
     ASSERT_TRUE(cbm_registry_exists(r, "proj.cmd.main"));
     ASSERT_FALSE(cbm_registry_exists(r, "proj.cmd.other"));
@@ -201,8 +202,8 @@ TEST(registry_add_and_exists) {
 
 TEST(registry_label_of) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Foo", "proj.pkg.Foo", "Class");
-    cbm_registry_add(r, "bar", "proj.pkg.bar", "Function");
+    cbm_registry_add(r, "Foo", "proj.pkg.Foo", "Class", CBM_LANG_COUNT);
+    cbm_registry_add(r, "bar", "proj.pkg.bar", "Function", CBM_LANG_COUNT);
 
     ASSERT_STR_EQ(cbm_registry_label_of(r, "proj.pkg.Foo"), "Class");
     ASSERT_STR_EQ(cbm_registry_label_of(r, "proj.pkg.bar"), "Function");
@@ -214,9 +215,9 @@ TEST(registry_label_of) {
 
 TEST(registry_find_by_name) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "main", "proj.cmd.main", "Function");
-    cbm_registry_add(r, "main", "proj.srv.main", "Function");
-    cbm_registry_add(r, "helper", "proj.util.helper", "Function");
+    cbm_registry_add(r, "main", "proj.cmd.main", "Function", CBM_LANG_COUNT);
+    cbm_registry_add(r, "main", "proj.srv.main", "Function", CBM_LANG_COUNT);
+    cbm_registry_add(r, "helper", "proj.util.helper", "Function", CBM_LANG_COUNT);
 
     const char **out = NULL;
     int count = 0;
@@ -235,8 +236,8 @@ TEST(registry_find_by_name) {
 
 TEST(registry_no_duplicates) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "main", "proj.cmd.main", "Function");
-    cbm_registry_add(r, "main", "proj.cmd.main", "Function"); /* duplicate */
+    cbm_registry_add(r, "main", "proj.cmd.main", "Function", CBM_LANG_COUNT);
+    cbm_registry_add(r, "main", "proj.cmd.main", "Function", CBM_LANG_COUNT); /* duplicate */
     ASSERT_EQ(cbm_registry_size(r), 1);
 
     const char **out = NULL;
@@ -252,7 +253,7 @@ TEST(registry_no_duplicates) {
 
 TEST(resolve_same_module) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "helper", "proj.pkg.service.helper", "Function");
+    cbm_registry_add(r, "helper", "proj.pkg.service.helper", "Function", CBM_LANG_COUNT);
 
     /* Call "helper" from the same module → should resolve */
     cbm_resolution_t res = cbm_registry_resolve(r, "helper", "proj.pkg.service", NULL, NULL, 0);
@@ -270,9 +271,9 @@ TEST(resolve_same_module) {
  * Foo::Bar::sub()) where the same sub name exists in multiple packages. */
 TEST(resolve_qualified_disambiguates_same_name) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "save", "proj.lib.App.Alpha.save", "Function");
-    cbm_registry_add(r, "save", "proj.lib.App.Beta.save", "Function");
-    cbm_registry_add(r, "save", "proj.lib.App.Gamma.save", "Function");
+    cbm_registry_add(r, "save", "proj.lib.App.Alpha.save", "Function", CBM_LANG_COUNT);
+    cbm_registry_add(r, "save", "proj.lib.App.Beta.save", "Function", CBM_LANG_COUNT);
+    cbm_registry_add(r, "save", "proj.lib.App.Gamma.save", "Function", CBM_LANG_COUNT);
 
     /* Each fully-qualified call routes to its own package. */
     cbm_resolution_t a =
@@ -314,8 +315,8 @@ TEST(resolve_qualified_disambiguates_same_name) {
  * pick arbitrarily under the high-confidence qualified_suffix strategy. */
 TEST(resolve_qualified_ambiguous_tail_falls_through) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "run", "proj.svcA.Foo.Bar.run", "Function");
-    cbm_registry_add(r, "run", "proj.svcB.Foo.Bar.run", "Function");
+    cbm_registry_add(r, "run", "proj.svcA.Foo.Bar.run", "Function", CBM_LANG_COUNT);
+    cbm_registry_add(r, "run", "proj.svcB.Foo.Bar.run", "Function", CBM_LANG_COUNT);
 
     /* "Foo::Bar::run" tail matches BOTH candidates → not unique → fall through. */
     cbm_resolution_t res =
@@ -328,7 +329,7 @@ TEST(resolve_qualified_ambiguous_tail_falls_through) {
 
 TEST(resolve_import_map) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Process", "proj.pkg.worker.Process", "Function");
+    cbm_registry_add(r, "Process", "proj.pkg.worker.Process", "Function", CBM_LANG_COUNT);
 
     /* Import map: "worker" → "proj.pkg.worker" */
     const char *keys[] = {"worker"};
@@ -351,9 +352,9 @@ TEST(resolve_import_map) {
  * file. Regression for the @/lib/auth-style import case. */
 TEST(resolve_import_map_bare_function) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "requireAdmin", "proj.lib.authorization.requireAdmin", "Function");
+    cbm_registry_add(r, "requireAdmin", "proj.lib.authorization.requireAdmin", "Function", CBM_LANG_COUNT);
     /* Same name in another module — without the fix this is what gets picked. */
-    cbm_registry_add(r, "requireAdmin", "proj.lib.users.requireAdmin", "Function");
+    cbm_registry_add(r, "requireAdmin", "proj.lib.users.requireAdmin", "Function", CBM_LANG_COUNT);
 
     const char *keys[] = {"requireAdmin"};
     const char *vals[] = {"proj.lib.authorization"};
@@ -369,7 +370,7 @@ TEST(resolve_import_map_bare_function) {
 
 TEST(resolve_unique_name) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "UniqueFunc", "proj.deep.path.UniqueFunc", "Function");
+    cbm_registry_add(r, "UniqueFunc", "proj.deep.path.UniqueFunc", "Function", CBM_LANG_COUNT);
 
     /* Call "UniqueFunc" — only one candidate project-wide */
     cbm_resolution_t res =
@@ -383,7 +384,7 @@ TEST(resolve_unique_name) {
 
 TEST(resolve_unresolved) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "foo", "proj.pkg.foo", "Function");
+    cbm_registry_add(r, "foo", "proj.pkg.foo", "Function", CBM_LANG_COUNT);
 
     /* Call "nonexistent" — not in registry */
     cbm_resolution_t res = cbm_registry_resolve(r, "nonexistent", "proj.other", NULL, NULL, 0);
@@ -400,7 +401,7 @@ TEST(resolve_many_nodes) {
         char name[32], qn[64];
         snprintf(name, sizeof(name), "func_%d", i);
         snprintf(qn, sizeof(qn), "proj.pkg.func_%d", i);
-        cbm_registry_add(r, name, qn, "Function");
+        cbm_registry_add(r, name, qn, "Function", CBM_LANG_COUNT);
     }
     ASSERT_EQ(cbm_registry_size(r), 500);
 
@@ -438,8 +439,8 @@ TEST(confidence_band_speculative) {
 
 TEST(resolve_suffix_match) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Process", "proj.svcA.Process", "Function");
-    cbm_registry_add(r, "Process", "proj.svcB.Process", "Function");
+    cbm_registry_add(r, "Process", "proj.svcA.Process", "Function", CBM_LANG_COUNT);
+    cbm_registry_add(r, "Process", "proj.svcB.Process", "Function", CBM_LANG_COUNT);
 
     /* Caller in svcA — should prefer svcA via import distance */
     cbm_resolution_t res = cbm_registry_resolve(r, "Process", "proj.svcA.caller", NULL, NULL, 0);
@@ -462,7 +463,7 @@ TEST(resolve_caps_unresolvably_ambiguous_names) {
     for (int i = 0; i < 300; i++) {
         char qn[64];
         snprintf(qn, sizeof(qn), "proj.mod%d.flags", i);
-        cbm_registry_add(r, "flags", qn, "Variable");
+        cbm_registry_add(r, "flags", qn, "Variable", CBM_LANG_COUNT);
     }
     cbm_resolution_t res = cbm_registry_resolve(r, "flags", "proj.other.caller", NULL, NULL, 0);
     ASSERT_TRUE(res.qualified_name == NULL || res.qualified_name[0] == '\0');
@@ -480,7 +481,7 @@ TEST(resolve_caps_unresolvably_ambiguous_names) {
 
 TEST(resolve_import_map_suffix) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Foo", "proj.other.sub.Foo", "Function");
+    cbm_registry_add(r, "Foo", "proj.other.sub.Foo", "Function", CBM_LANG_COUNT);
 
     const char *keys[] = {"other"};
     const char *vals[] = {"proj.other"};
@@ -502,7 +503,7 @@ TEST(resolve_is_import_reachable) {
     /* Test import reachability through unique_name confidence penalty.
      * is_import_reachable is static, so we test it indirectly. */
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Helper", "proj.shared.utils.Helper", "Function");
+    cbm_registry_add(r, "Helper", "proj.shared.utils.Helper", "Function", CBM_LANG_COUNT);
 
     /* With import covering the module → full confidence */
     const char *keys1[] = {"utils"};
@@ -525,7 +526,7 @@ TEST(resolve_is_import_reachable) {
 TEST(resolve_import_reachable_prefix) {
     /* "proj.handler.sub.Process" should be reachable via import "proj.handler" */
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Process", "proj.handler.sub.Process", "Function");
+    cbm_registry_add(r, "Process", "proj.handler.sub.Process", "Function", CBM_LANG_COUNT);
 
     const char *keys[] = {"handler"};
     const char *vals[] = {"proj.handler"};
@@ -541,8 +542,8 @@ TEST(resolve_import_reachable_prefix) {
 
 TEST(negative_import_rejects_unimported) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Process", "proj.billing.Process", "Function");
-    cbm_registry_add(r, "Process", "proj.handler.Process", "Function");
+    cbm_registry_add(r, "Process", "proj.billing.Process", "Function", CBM_LANG_COUNT);
+    cbm_registry_add(r, "Process", "proj.handler.Process", "Function", CBM_LANG_COUNT);
 
     /* Import only handler's module — suffix_match should prefer handler */
     const char *keys[] = {"handler"};
@@ -558,8 +559,8 @@ TEST(negative_import_rejects_unimported) {
 
 TEST(fuzzy_resolve_single_candidate) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "CreateOrder", "svcA.handlers.CreateOrder", "Function");
-    cbm_registry_add(r, "ValidateOrder", "svcB.validators.ValidateOrder", "Function");
+    cbm_registry_add(r, "CreateOrder", "svcA.handlers.CreateOrder", "Function", CBM_LANG_COUNT);
+    cbm_registry_add(r, "ValidateOrder", "svcB.validators.ValidateOrder", "Function", CBM_LANG_COUNT);
 
     /* FuzzyResolve should find by simple name even with unknown prefix */
     cbm_fuzzy_result_t fr =
@@ -573,7 +574,7 @@ TEST(fuzzy_resolve_single_candidate) {
 
 TEST(fuzzy_resolve_nonexistent) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "CreateOrder", "svcA.handlers.CreateOrder", "Function");
+    cbm_registry_add(r, "CreateOrder", "svcA.handlers.CreateOrder", "Function", CBM_LANG_COUNT);
 
     cbm_fuzzy_result_t fr =
         cbm_registry_fuzzy_resolve(r, "NonExistent", "svcC.caller", NULL, NULL, 0);
@@ -585,8 +586,8 @@ TEST(fuzzy_resolve_nonexistent) {
 
 TEST(fuzzy_resolve_multiple_best_by_distance) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Process", "svcA.handlers.Process", "Function");
-    cbm_registry_add(r, "Process", "svcB.handlers.Process", "Function");
+    cbm_registry_add(r, "Process", "svcA.handlers.Process", "Function", CBM_LANG_COUNT);
+    cbm_registry_add(r, "Process", "svcB.handlers.Process", "Function", CBM_LANG_COUNT);
 
     /* Caller in svcA — should prefer svcA */
     cbm_fuzzy_result_t fr =
@@ -605,7 +606,7 @@ TEST(fuzzy_resolve_multiple_best_by_distance) {
 
 TEST(fuzzy_resolve_deep_name_extraction) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "DoWork", "myproject.utils.DoWork", "Function");
+    cbm_registry_add(r, "DoWork", "myproject.utils.DoWork", "Function", CBM_LANG_COUNT);
 
     /* Deeply qualified callee — should extract "DoWork" */
     cbm_fuzzy_result_t fr =
@@ -630,7 +631,7 @@ TEST(fuzzy_resolve_empty_registry) {
 
 TEST(fuzzy_resolve_confidence_single) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Handler", "proj.svc.Handler", "Function");
+    cbm_registry_add(r, "Handler", "proj.svc.Handler", "Function", CBM_LANG_COUNT);
 
     cbm_fuzzy_result_t fr =
         cbm_registry_fuzzy_resolve(r, "unknownPkg.Handler", "proj.caller", NULL, NULL, 0);
@@ -644,8 +645,8 @@ TEST(fuzzy_resolve_confidence_single) {
 
 TEST(fuzzy_resolve_confidence_distance) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Process", "proj.svcA.Process", "Function");
-    cbm_registry_add(r, "Process", "proj.svcB.Process", "Function");
+    cbm_registry_add(r, "Process", "proj.svcA.Process", "Function", CBM_LANG_COUNT);
+    cbm_registry_add(r, "Process", "proj.svcB.Process", "Function", CBM_LANG_COUNT);
 
     cbm_fuzzy_result_t fr =
         cbm_registry_fuzzy_resolve(r, "unknownPkg.Process", "proj.svcA.other", NULL, NULL, 0);
@@ -659,7 +660,7 @@ TEST(fuzzy_resolve_confidence_distance) {
 
 TEST(fuzzy_penalty_unreachable_import) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Handler", "proj.billing.Handler", "Function");
+    cbm_registry_add(r, "Handler", "proj.billing.Handler", "Function", CBM_LANG_COUNT);
 
     /* Import for different module → confidence halved */
     const char *keys[] = {"other"};
@@ -676,7 +677,7 @@ TEST(fuzzy_penalty_unreachable_import) {
 
 TEST(fuzzy_no_import_map_passthrough) {
     cbm_registry_t *r = cbm_registry_new();
-    cbm_registry_add(r, "Handler", "proj.billing.Handler", "Function");
+    cbm_registry_add(r, "Handler", "proj.billing.Handler", "Function", CBM_LANG_COUNT);
 
     /* nil import map → full confidence */
     cbm_fuzzy_result_t fr =

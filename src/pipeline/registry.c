@@ -25,6 +25,7 @@ enum { REG_MAX_CANDIDATES = 256 };
 
 #define DEFAULT_CONFIDENCE 0.5
 #include "pipeline/pipeline.h"
+#include "cbm.h" /* CBMLanguage enum (Odoo fork: language-scoped resolution) */
 #include "foundation/compat.h" /* CBM_TLS */
 #include "foundation/hash_table.h"
 #include "foundation/dyn_array.h"
@@ -80,7 +81,67 @@ struct cbm_registry {
 
     /* byName: simpleName → qn_array_t* (heap-owned) */
     CBMHashTable *by_name;
+
+    /* langOfQn: qualifiedName → (CBMLanguage+1) stored as intptr (Odoo fork).
+     * +1 so a stored value is never 0/NULL (CBM_LANG_GO == 0). Lets the
+     * name-lookup resolver drop cross-language candidates — e.g. a Python
+     * `self.env['x'].create()` call must not resolve to a JS `create`. */
+    CBMHashTable *lang_of_qn;
+
+    /* Odoo fork (Tier B): model graph indices for ORM call resolution.
+     * model_contributors: modelName → qn_array_t* of Class QNs that declare
+     *   (_name) or extend (_inherit) the model — i.e. classes whose methods
+     *   belong to the model.
+     * model_parents: modelName → qn_array_t* of parent model NAMES from
+     *   _inherit / _inherits (for walking the inheritance chain). */
+    CBMHashTable *model_contributors;
+    CBMHashTable *model_parents;
 };
+
+/* Odoo fork: language-family compatibility for cross-language candidate
+ * filtering. Returns true when a call written in `caller` may legitimately
+ * resolve to a definition in `cand`. Same language always matches; a few
+ * families interoperate (JS/TS/JSX/TSX; C/C++/ObjC; Kotlin/Java). A sentinel
+ * of CBM_LANG_COUNT (or any out-of-range value) disables filtering. Unknown
+ * candidate language (0 from the map = "not recorded") also passes so that
+ * builtins and externally-registered nodes are never dropped. */
+static bool lang_family_compatible(int caller, int cand) {
+    if (caller < 0 || caller >= CBM_LANG_COUNT) {
+        return true; /* no caller language → do not filter */
+    }
+    if (cand < 0 || cand >= CBM_LANG_COUNT) {
+        return true; /* candidate language unknown → keep (builtins etc.) */
+    }
+    if (caller == cand) {
+        return true;
+    }
+    switch (caller) {
+    case CBM_LANG_JAVASCRIPT:
+    case CBM_LANG_TYPESCRIPT:
+    case CBM_LANG_TSX:
+        return cand == CBM_LANG_JAVASCRIPT || cand == CBM_LANG_TYPESCRIPT ||
+               cand == CBM_LANG_TSX;
+    case CBM_LANG_C:
+    case CBM_LANG_CPP:
+    case CBM_LANG_OBJC:
+        return cand == CBM_LANG_C || cand == CBM_LANG_CPP || cand == CBM_LANG_OBJC;
+    case CBM_LANG_KOTLIN:
+    case CBM_LANG_JAVA:
+        return cand == CBM_LANG_KOTLIN || cand == CBM_LANG_JAVA;
+    default:
+        return false;
+    }
+}
+
+/* Odoo fork: look up the recorded language for a candidate QN. Returns
+ * CBM_LANG_COUNT ("unknown") when not recorded. */
+static int registry_lang_of(const cbm_registry_t *r, const char *qn) {
+    if (!r || !r->lang_of_qn || !qn) {
+        return CBM_LANG_COUNT;
+    }
+    intptr_t v = (intptr_t)cbm_ht_get(r->lang_of_qn, qn);
+    return v ? (int)(v - 1) : CBM_LANG_COUNT;
+}
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
@@ -432,6 +493,9 @@ cbm_registry_t *cbm_registry_new(void) {
     }
     r->exact = cbm_ht_create(CBM_SZ_1K);
     r->by_name = cbm_ht_create(CBM_SZ_512);
+    r->lang_of_qn = cbm_ht_create(CBM_SZ_1K); /* Odoo fork */
+    r->model_contributors = cbm_ht_create(CBM_SZ_512); /* Odoo fork */
+    r->model_parents = cbm_ht_create(CBM_SZ_512);      /* Odoo fork */
     return r;
 }
 
@@ -439,6 +503,13 @@ static void free_label(const char *key, void *value, void *ud) {
     (void)ud;
     free((void *)key);
     free(value);
+}
+
+/* Odoo fork: free only the strdup'd key; the value is an inline intptr. */
+static void free_key_only(const char *key, void *value, void *ud) {
+    (void)value;
+    (void)ud;
+    free((void *)key);
 }
 
 static void free_qn_array(const char *key, void *value, void *ud) {
@@ -462,13 +533,23 @@ void cbm_registry_free(cbm_registry_t *r) {
     cbm_ht_free(r->exact);
     cbm_ht_foreach(r->by_name, free_qn_array, NULL);
     cbm_ht_free(r->by_name);
+    /* Odoo fork: lang_of_qn values are inline intptr (no heap), keys are strdup'd.
+     * free_label frees the key and free()s the value pointer — but our value is
+     * not a heap pointer, so free a key-only walker instead. */
+    cbm_ht_foreach(r->lang_of_qn, free_key_only, NULL);
+    cbm_ht_free(r->lang_of_qn);
+    /* Odoo fork: model indices hold qn_array_t* values (same shape as by_name). */
+    cbm_ht_foreach(r->model_contributors, free_qn_array, NULL);
+    cbm_ht_free(r->model_contributors);
+    cbm_ht_foreach(r->model_parents, free_qn_array, NULL);
+    cbm_ht_free(r->model_parents);
     free(r);
 }
 
 /* ── Registration ────────────────────────────────────────────────── */
 
 void cbm_registry_add(cbm_registry_t *r, const char *name, const char *qualified_name,
-                      const char *label) {
+                      const char *label, int lang) {
     (void)name;
     if (!r || !qualified_name || !label) {
         return;
@@ -482,6 +563,12 @@ void cbm_registry_add(cbm_registry_t *r, const char *name, const char *qualified
     /* Store in exact map: QN → label */
     cbm_ht_set(r->exact, strdup(qualified_name), strdup(label));
 
+    /* Odoo fork: record candidate language (QN → lang+1) for language-scoped
+     * resolution. Stored once per QN, mirroring the exact-map dedup above. */
+    if (lang >= 0 && lang < CBM_LANG_COUNT) {
+        cbm_ht_set(r->lang_of_qn, strdup(qualified_name), (void *)(intptr_t)(lang + 1));
+    }
+
     /* Index by simple name.
      * No array dedup needed: exact-map check above guarantees uniqueness. */
     const char *simple = simple_name(qualified_name);
@@ -491,6 +578,116 @@ void cbm_registry_add(cbm_registry_t *r, const char *name, const char *qualified
         cbm_ht_set(r->by_name, strdup(simple), arr);
     }
     cbm_da_push(arr, strdup(qualified_name));
+}
+
+/* ── Odoo fork: model graph index ────────────────────────────────── */
+
+/* Append val to the qn_array stored at ht[key] (creating it), deduping. */
+static void model_index_append(CBMHashTable *ht, const char *key, const char *val) {
+    if (!key || !key[0] || !val || !val[0]) {
+        return;
+    }
+    qn_array_t *arr = cbm_ht_get(ht, key);
+    if (!arr) {
+        arr = calloc(CBM_ALLOC_ONE, sizeof(qn_array_t));
+        if (!arr) {
+            return;
+        }
+        cbm_ht_set(ht, strdup(key), arr);
+    }
+    for (int i = 0; i < arr->count; i++) {
+        if (strcmp(arr->items[i], val) == 0) {
+            return; /* dedup */
+        }
+    }
+    cbm_da_push(arr, strdup(val));
+}
+
+void cbm_registry_add_model(cbm_registry_t *r, const char *model_name, const char *class_qn,
+                            const char **inherit_list) {
+    if (!r || !class_qn) {
+        return;
+    }
+    /* A class with an explicit _name contributes to that model. */
+    if (model_name && model_name[0]) {
+        model_index_append(r->model_contributors, model_name, class_qn);
+    }
+    /* Each _inherit/_inherits target: this class also contributes to that model
+     * (extension), and — when the class has its own _name — records a parent
+     * link _name -> target for chain walking. A pure-extension class (no _name)
+     * just adds itself as a contributor of the inherited model. */
+    if (inherit_list) {
+        for (int i = 0; inherit_list[i]; i++) {
+            const char *parent = inherit_list[i];
+            model_index_append(r->model_contributors, parent, class_qn);
+            if (model_name && model_name[0] && strcmp(model_name, parent) != 0) {
+                model_index_append(r->model_parents, model_name, parent);
+            }
+        }
+    }
+}
+
+cbm_resolution_t cbm_registry_resolve_orm(const cbm_registry_t *r, const char *model_name,
+                                          const char *method_name) {
+    if (!r || !model_name || !model_name[0] || !method_name || !method_name[0]) {
+        return empty_result();
+    }
+    /* The caller's callee_name may be the full receiver chain
+     * (self.env['x'].method); reduce to the bare method name. */
+    method_name = simple_name(method_name);
+    /* BFS over the model + its _inherit parents (cycle-guarded). For each model,
+     * probe every contributor class for an exact "<class_qn>.<method>" def. */
+    const char *queue[REG_MAX_CANDIDATES];
+    const char *seen[REG_MAX_CANDIDATES];
+    int qhead = 0, qtail = 0, nseen = 0;
+    queue[qtail++] = model_name;
+    seen[nseen++] = model_name;
+
+    while (qhead < qtail) {
+        const char *model = queue[qhead++];
+        qn_array_t *contribs = cbm_ht_get(r->model_contributors, model);
+        if (contribs) {
+            for (int i = 0; i < contribs->count; i++) {
+                char probe[CBM_SZ_512];
+                snprintf(probe, sizeof(probe), "%s.%s", contribs->items[i], method_name);
+                const char *label = cbm_ht_get(r->exact, probe);
+                if (label) {
+                    /* exact key is heap-owned by the registry; return a stable ptr */
+                    const char *qn = NULL;
+                    qn_array_t *byn = cbm_ht_get(r->by_name, simple_name(probe));
+                    if (byn) {
+                        for (int k = 0; k < byn->count; k++) {
+                            if (strcmp(byn->items[k], probe) == 0) {
+                                qn = byn->items[k];
+                                break;
+                            }
+                        }
+                    }
+                    if (qn) {
+                        return (cbm_resolution_t){qn, "odoo_orm", CONF_SAME_MODULE, REG_RESOLVED};
+                    }
+                }
+            }
+        }
+        qn_array_t *parents = cbm_ht_get(r->model_parents, model);
+        if (parents) {
+            for (int i = 0; i < parents->count && qtail < REG_MAX_CANDIDATES; i++) {
+                const char *p = parents->items[i];
+                bool dup = false;
+                for (int s = 0; s < nseen; s++) {
+                    if (strcmp(seen[s], p) == 0) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup && nseen < REG_MAX_CANDIDATES) {
+                    seen[nseen++] = p;
+                    queue[qtail++] = p;
+                }
+            }
+        }
+    }
+    return empty_result();
 }
 
 /* ── Lookup ──────────────────────────────────────────────────────── */
@@ -714,7 +911,7 @@ static const char *qualified_suffix_match(const qn_array_t *arr, const char *cal
 /* Strategy 3+4: Name lookup + suffix match */
 static cbm_resolution_t resolve_name_lookup(const cbm_registry_t *r, const char *callee_name,
                                             const char *module_qn, const char **import_vals,
-                                            int import_count) {
+                                            int import_count, int caller_lang) {
     const char *lookup = simple_name(callee_name);
     qn_array_t *arr = cbm_ht_get(r->by_name, lookup);
     if (!arr || arr->count == 0) {
@@ -722,6 +919,31 @@ static cbm_resolution_t resolve_name_lookup(const cbm_registry_t *r, const char 
     }
     if (arr->count > REG_MAX_CANDIDATES) {
         return empty_result(); /* unresolvably ambiguous — see REG_MAX_CANDIDATES */
+    }
+
+    /* Odoo fork: drop cross-language candidates before any scoring strategy
+     * runs. A Python `self.env['x'].create()` must never resolve to a JS/XML
+     * `create`. Filter into a borrowed-pointer view; if every candidate is
+     * cross-language, return empty (no edge beats a false edge). When nothing
+     * is dropped, fall through using the original array unchanged. */
+    char *lang_filtered[REG_MAX_CANDIDATES];
+    qn_array_t farr = {0};
+    if (caller_lang >= 0 && caller_lang < CBM_LANG_COUNT && arr->count > 0) {
+        int fn = 0;
+        for (int i = 0; i < arr->count && fn < REG_MAX_CANDIDATES; i++) {
+            if (lang_family_compatible(caller_lang, registry_lang_of(r, arr->items[i]))) {
+                lang_filtered[fn++] = arr->items[i];
+            }
+        }
+        if (fn == 0) {
+            return empty_result();
+        }
+        if (fn < arr->count) {
+            farr.items = lang_filtered;
+            farr.count = fn;
+            farr.cap = fn;
+            arr = &farr;
+        }
     }
 
     /* Strategy 3.5: a qualified callee disambiguates among multiple same-name
@@ -756,19 +978,29 @@ static cbm_resolution_t resolve_name_lookup(const cbm_registry_t *r, const char 
     return empty_result();
 }
 
-cbm_resolution_t cbm_registry_resolve(const cbm_registry_t *r, const char *callee_name,
-                                      const char *module_qn, const char **import_map_keys,
-                                      const char **import_map_vals, int import_map_count) {
+/* Odoo fork: shared implementation. caller_lang scopes name-lookup candidates
+ * to the calling file's language family (CBM_LANG_COUNT = no filtering). The
+ * per-file resolve cache stays keyed by callee_name alone: its begin/end
+ * bracket is per-file and a file has a single language, so caller_lang is
+ * constant for the cache's lifetime. */
+static cbm_resolution_t resolve_with_lang(const cbm_registry_t *r, const char *callee_name,
+                                          const char *module_qn, const char **import_map_keys,
+                                          const char **import_map_vals, int import_map_count,
+                                          int caller_lang) {
     if (!r || !callee_name) {
         return empty_result();
     }
 
     /* Per-file cache: same callee_name in N call sites → 1 chain walk
      * + N-1 O(1) hash hits. module_qn is constant per file so the
-     * cache key only needs callee_name. */
+     * cache key only needs callee_name. Odoo fork: the key is prefixed with
+     * caller_lang so a language-scoped result never aliases a language-agnostic
+     * one for the same name within a shared cache scope. */
+    char cache_key[CBM_SZ_512];
+    snprintf(cache_key, sizeof(cache_key), "%d\x1f%s", caller_lang, callee_name);
     if (_resolve_cache) {
         resolve_cache_entry_t *cached =
-            (resolve_cache_entry_t *)cbm_ht_get(_resolve_cache, callee_name);
+            (resolve_cache_entry_t *)cbm_ht_get(_resolve_cache, cache_key);
         if (cached) {
             return cached->res;
         }
@@ -810,7 +1042,8 @@ cbm_resolution_t cbm_registry_resolve(const cbm_registry_t *r, const char *calle
     }
     if (!(res.qualified_name && res.qualified_name[0])) {
         /* Strategy 3+4: name lookup */
-        res = resolve_name_lookup(r, callee_name, module_qn, import_map_vals, import_map_count);
+        res = resolve_name_lookup(r, callee_name, module_qn, import_map_vals, import_map_count,
+                                  caller_lang);
     }
 
     /* Cache the result (including empty — caching the negative answer
@@ -819,7 +1052,7 @@ cbm_resolution_t cbm_registry_resolve(const cbm_registry_t *r, const char *calle
         resolve_cache_entry_t *e = (resolve_cache_entry_t *)malloc(sizeof(*e));
         if (e) {
             e->res = res;
-            char *kdup = strdup(callee_name);
+            char *kdup = strdup(cache_key);
             if (kdup) {
                 cbm_ht_set(_resolve_cache, kdup, e);
             } else {
@@ -828,6 +1061,27 @@ cbm_resolution_t cbm_registry_resolve(const cbm_registry_t *r, const char *calle
         }
     }
     return res;
+}
+
+/* Public API: language-agnostic resolve (original behavior, no candidate
+ * language filtering). Used by usages/semantic/exception passes. */
+cbm_resolution_t cbm_registry_resolve(const cbm_registry_t *r, const char *callee_name,
+                                      const char *module_qn, const char **import_map_keys,
+                                      const char **import_map_vals, int import_map_count) {
+    return resolve_with_lang(r, callee_name, module_qn, import_map_keys, import_map_vals,
+                             import_map_count, CBM_LANG_COUNT);
+}
+
+/* Odoo fork. Public API: language-scoped resolve. caller_lang is the language
+ * of the file making the call; name-lookup candidates in an incompatible
+ * language family are dropped before scoring. Used by the CALLS passes so a
+ * Python ORM call never resolves to a same-named JS/XML node. */
+cbm_resolution_t cbm_registry_resolve_lang(const cbm_registry_t *r, const char *callee_name,
+                                           const char *module_qn, const char **import_map_keys,
+                                           const char **import_map_vals, int import_map_count,
+                                           int caller_lang) {
+    return resolve_with_lang(r, callee_name, module_qn, import_map_keys, import_map_vals,
+                             import_map_count, caller_lang);
 }
 
 /* ── Fuzzy Resolve ──────────────────────────────────────────────── */

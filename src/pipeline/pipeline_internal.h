@@ -515,6 +515,27 @@ int cbm_pipeline_pass_semantic_edges(cbm_pipeline_ctx_t *ctx);
  * cycles (recursive). Runs on the graph buffer before the dump. */
 void cbm_pipeline_pass_complexity(cbm_pipeline_ctx_t *ctx);
 
+/* ── Odoo model graph (pass_odoo_model.c, Odoo fork Tier B) ───────── */
+/* Builds Model nodes + DEFINES_MODEL / INHERITS_MODEL edges from the
+ * odoo_model_name / odoo_inherit_list properties on Class nodes. Predump. */
+void cbm_pipeline_pass_odoo_model(cbm_pipeline_ctx_t *ctx);
+
+/* Build the deterministic Model-node QN ("__model__<name>") into buf. */
+void cbm_odoo_model_qn(const char *name, char *buf, size_t sz);
+/* Upsert (or find) the synthetic Model node for `name`; returns its temp id. */
+int64_t cbm_odoo_ensure_model_node(cbm_gbuf_t *gb, const char *name);
+/* Pre-create Model nodes for a class def's _name + every _inherit target, so
+ * the (possibly multi-threaded) call-resolution phase can look them up to emit
+ * ORM_CALLS edges. Call single-threaded at definition/registry time. */
+void cbm_odoo_ensure_models_for_def(cbm_gbuf_t *gb, const char *model_name,
+                                    const char **inherit_list);
+
+/* ── Odoo view graph (pass_odoo_xml.c, Odoo fork Tier C) ──────────── */
+/* Scans ir.ui.view XML records → View nodes + FOR_MODEL (view->model) +
+ * EXTENDS (inherited view -> parent via inherit_id). Main-sequence pass. */
+int cbm_pipeline_pass_odoo_xml(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
+                               int file_count);
+
 /* ── Env URL scanner (pass_envscan.c) ────────────────────────────── */
 
 typedef struct {

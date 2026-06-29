@@ -23,6 +23,7 @@ enum { PD_JSON_FIELD_OVERHEAD = 6 };
 #include "foundation/log.h"
 #include "foundation/compat.h"
 #include "cbm.h"
+#include "discover/discover.h" /* cbm_language_for_filename (Odoo fork) */
 #include "simhash/minhash.h"
 #include "semantic/ast_profile.h"
 
@@ -256,6 +257,9 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
     append_json_string(buf, bufsize, &pos, "parent_class", def->parent_class);
     append_json_str_array(buf, bufsize, &pos, "decorators", def->decorators);
     append_json_str_array(buf, bufsize, &pos, "base_classes", def->base_classes);
+    /* Odoo fork (Tier B) — KEEP IN SYNC with pass_parallel.c build_def_props. */
+    append_json_string(buf, bufsize, &pos, "odoo_model_name", def->odoo_model_name);
+    append_json_str_array(buf, bufsize, &pos, "odoo_inherit_list", def->odoo_inherit_list);
     append_json_str_array(buf, bufsize, &pos, "param_names", def->param_names);
     append_json_str_array(buf, bufsize, &pos, "param_types", def->param_types);
     append_json_string(buf, bufsize, &pos, "route_path", def->route_path);
@@ -307,7 +311,18 @@ static void process_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *def, const
         (strcmp(def->label, "Function") == 0 || strcmp(def->label, "Method") == 0 ||
          cbm_label_is_type_like(def->label) || strcmp(def->label, "Variable") == 0 ||
          strcmp(def->label, "Field") == 0)) {
-        cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label);
+        const char *dpath = def->file_path ? def->file_path : rel;
+        cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label,
+                         dpath ? (int)cbm_language_for_filename(dpath) : CBM_LANG_COUNT);
+    }
+    /* Odoo fork (Tier B): index the model this class declares/extends — KEEP IN
+     * SYNC with pass_parallel.c register_and_link_def + pipeline_incremental.c. */
+    if (node_id > 0 && (def->odoo_model_name || def->odoo_inherit_list)) {
+        cbm_registry_add_model(ctx->registry, def->odoo_model_name, def->qualified_name,
+                               def->odoo_inherit_list);
+        /* Pre-create Model nodes now (single-threaded) so call resolution can
+         * emit ORM_CALLS edges to them; the predump pass adds the model edges. */
+        cbm_odoo_ensure_models_for_def(ctx->gbuf, def->odoo_model_name, def->odoo_inherit_list);
     }
     char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
     const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);

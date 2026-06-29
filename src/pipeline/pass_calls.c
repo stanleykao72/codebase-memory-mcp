@@ -469,8 +469,39 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
         }
     }
 
-    cbm_resolution_t res = cbm_registry_resolve(ctx->registry, call->callee_name, module_qn,
-                                                imp_keys, imp_vals, imp_count);
+    /* Odoo fork (Tier B): ORM call via self.env['model'].method() — resolve to
+     * the method defined on that model's class chain, not a bare-name guess. If
+     * the model defines/overrides the method, emit the precise edge and stop. If
+     * not (base ORM verb like search/write living in odoo core), drop rather
+     * than fall through to bare-name guessing (would re-introduce a wrong edge). */
+    if (lang == CBM_LANG_PYTHON && call->model_name && call->model_name[0]) {
+        cbm_resolution_t orm =
+            cbm_registry_resolve_orm(ctx->registry, call->model_name, call->callee_name);
+        if (orm.qualified_name && orm.qualified_name[0]) {
+            const cbm_gbuf_node_t *t = cbm_gbuf_find_by_qn(ctx->gbuf, orm.qualified_name);
+            if (t && source_node->id != t->id) {
+                emit_classified_edge(ctx, call, source_node, t, &orm, module_qn, imp_keys, imp_vals,
+                                     imp_count);
+            }
+        } else {
+            /* Method not overridden in-project (base ORM verb: search/write/...).
+             * Still record that this code touches the model: ORM_CALLS -> Model
+             * node (pre-created at definition time). */
+            char mqn[320];
+            cbm_odoo_model_qn(call->model_name, mqn, sizeof(mqn));
+            const cbm_gbuf_node_t *m = cbm_gbuf_find_by_qn(ctx->gbuf, mqn);
+            if (m && source_node->id != m->id) {
+                cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, m->id, "ORM_CALLS", "{}");
+            }
+        }
+        return SKIP_ONE;
+    }
+
+    /* Odoo fork: scope candidates to the calling file's language so a Python
+     * ORM call (create/search/write/...) never resolves to a same-named JS/XML
+     * node. lang is this file's CBMLanguage. */
+    cbm_resolution_t res = cbm_registry_resolve_lang(ctx->registry, call->callee_name, module_qn,
+                                                     imp_keys, imp_vals, imp_count, (int)lang);
     if (!res.qualified_name || res.qualified_name[0] == '\0') {
         /* Resolution is empty when the callee belongs to an EXTERNAL client
          * library whose source is not in the indexed tree (e.g. `requests.get`,
