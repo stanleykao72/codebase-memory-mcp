@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Base list + form view for library.book -->
+    <record id="view_library_book_list" model="ir.ui.view">
+        <field name="name">library.book.list</field>
+        <field name="model">library.book</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="name"/>
+                <field name="state"/>
+                <field name="summary"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_library_book_form" model="ir.ui.view">
+        <field name="name">library.book.form</field>
+        <field name="model">library.book</field>
+        <field name="arch" type="xml">
+            <form>
+                <group>
+                    <field name="name"/>
+                    <field name="member_id"/>
+                    <field name="page_count"/>
+                </group>
+            </form>
+        </field>
+    </record>
+
+    <!-- Inherited view: extends the base form via inherit_id + xpath -->
+    <record id="view_library_book_form_inherit" model="ir.ui.view">
+        <field name="name">library.book.form.inherit</field>
+        <field name="model">library.book</field>
+        <field name="inherit_id" ref="view_library_book_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='page_count']" position="after">
+                <field name="summary"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>
