@@ -1,5 +1,31 @@
 # codebase-memory-mcp
 
+> ## 🟣 Odoo-aware fork
+>
+> This is an **Odoo-aware fork** of [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp).
+> Integration branch: **`odoo-main`** (default). The **`main`** branch mirrors upstream unchanged.
+>
+> On top of upstream it understands Odoo runtime conventions that are invisible to plain AST analysis:
+>
+> - **Model graph** — `_name` / `_inherit` / `_inherits` → `Model` nodes + `INHERITS_MODEL` / `DEFINES_MODEL` edges
+> - **ORM call resolution** — `self.env['x'].method()` resolves to the method on model `x`'s class chain; un-overridden base verbs emit an `ORM_CALLS` edge to the model
+> - **View graph** — `ir.ui.view` records → `View` nodes + `FOR_MODEL` (view → model) + `EXTENDS` (`inherit_id`, incl. cross-module)
+> - **Language-scoped resolution** — Python ORM verbs (`create`/`search`/`write`) no longer mis-resolve to same-named JS/XML nodes
+>
+> **Build & use** (no prebuilt releases for the fork):
+> ```bash
+> scripts/build.sh                       # → build/c/codebase-memory-mcp
+> ```
+> Then register the binary as an MCP server (e.g. in your project's `.mcp.json`):
+> ```jsonc
+> { "mcpServers": { "codebase-memory": { "type": "stdio", "command": "/abs/path/to/codebase-memory-mcp" } } }
+> ```
+> Restart your agent, say *“index this project”*, then query the Odoo layer, e.g.
+> `MATCH (f)-[:ORM_CALLS]->(m) WHERE m.name = 'hr.employee' RETURN f.name`.
+>
+> Full design, new labels/edges, queries, and limitations: **[docs/ODOO_FORK.md](docs/ODOO_FORK.md)**.
+> Everything below is upstream documentation for the base engine.
+
 [![GitHub Release](https://img.shields.io/github/v/release/DeusData/codebase-memory-mcp?style=flat&color=blue)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/DeusData/codebase-memory-mcp/dry-run.yml?label=CI)](https://github.com/DeusData/codebase-memory-mcp/actions/workflows/dry-run.yml)
