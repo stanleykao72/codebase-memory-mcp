@@ -320,6 +320,9 @@ static void process_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *def, const
     if (node_id > 0 && (def->odoo_model_name || def->odoo_inherit_list)) {
         cbm_registry_add_model(ctx->registry, def->odoo_model_name, def->qualified_name,
                                def->odoo_inherit_list);
+        /* Pre-create Model nodes now (single-threaded) so call resolution can
+         * emit ORM_CALLS edges to them; the predump pass adds the model edges. */
+        cbm_odoo_ensure_models_for_def(ctx->gbuf, def->odoo_model_name, def->odoo_inherit_list);
     }
     char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
     const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);

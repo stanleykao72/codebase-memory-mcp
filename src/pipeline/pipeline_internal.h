@@ -520,6 +520,16 @@ void cbm_pipeline_pass_complexity(cbm_pipeline_ctx_t *ctx);
  * odoo_model_name / odoo_inherit_list properties on Class nodes. Predump. */
 void cbm_pipeline_pass_odoo_model(cbm_pipeline_ctx_t *ctx);
 
+/* Build the deterministic Model-node QN ("__model__<name>") into buf. */
+void cbm_odoo_model_qn(const char *name, char *buf, size_t sz);
+/* Upsert (or find) the synthetic Model node for `name`; returns its temp id. */
+int64_t cbm_odoo_ensure_model_node(cbm_gbuf_t *gb, const char *name);
+/* Pre-create Model nodes for a class def's _name + every _inherit target, so
+ * the (possibly multi-threaded) call-resolution phase can look them up to emit
+ * ORM_CALLS edges. Call single-threaded at definition/registry time. */
+void cbm_odoo_ensure_models_for_def(cbm_gbuf_t *gb, const char *model_name,
+                                    const char **inherit_list);
+
 /* ── Env URL scanner (pass_envscan.c) ────────────────────────────── */
 
 typedef struct {

@@ -37,18 +37,40 @@ static const char *itoa_buf(int v) {
     return bufs[i];
 }
 
-/* Upsert the Model node for `name`, returning its temp id (0 on failure). */
-static int64_t ensure_model_node(cbm_gbuf_t *gb, const char *name) {
-    if (!name || !name[0]) {
+/* Build the deterministic Model node QN for a model name. */
+void cbm_odoo_model_qn(const char *name, char *buf, size_t sz) {
+    snprintf(buf, sz, ODOO_MODEL_QN_PREFIX "%s", name ? name : "");
+}
+
+/* Upsert the Model node for `name`, returning its temp id (0 on failure).
+ * Exported so call-resolution passes can pre-create model nodes before the
+ * (multi-threaded) resolve phase reads them for ORM_CALLS edges. */
+int64_t cbm_odoo_ensure_model_node(cbm_gbuf_t *gb, const char *name) {
+    if (!gb || !name || !name[0]) {
         return 0;
     }
     char qn[ODOO_MODEL_QN_SIZE];
-    snprintf(qn, sizeof(qn), ODOO_MODEL_QN_PREFIX "%s", name);
+    cbm_odoo_model_qn(name, qn, sizeof(qn));
     const cbm_gbuf_node_t *existing = cbm_gbuf_find_by_qn(gb, qn);
     if (existing) {
         return existing->id;
     }
     return cbm_gbuf_upsert_node(gb, "Model", name, qn, "", 0, 0, "{}");
+}
+
+/* Ensure Model nodes exist for a class def's _name + every _inherit target.
+ * Called single-threaded at definition/registry time so the resolve phase can
+ * safely look them up by QN. */
+void cbm_odoo_ensure_models_for_def(cbm_gbuf_t *gb, const char *model_name,
+                                    const char **inherit_list) {
+    if (model_name && model_name[0]) {
+        cbm_odoo_ensure_model_node(gb, model_name);
+    }
+    if (inherit_list) {
+        for (int i = 0; inherit_list[i]; i++) {
+            cbm_odoo_ensure_model_node(gb, inherit_list[i]);
+        }
+    }
 }
 
 void cbm_pipeline_pass_odoo_model(cbm_pipeline_ctx_t *ctx) {
@@ -85,7 +107,7 @@ void cbm_pipeline_pass_odoo_model(cbm_pipeline_ctx_t *ctx) {
          * inherited model. Establish the owning model node + DEFINES_MODEL. */
         int64_t own_model_id = 0;
         if (model_name && model_name[0]) {
-            own_model_id = ensure_model_node(ctx->gbuf, model_name);
+            own_model_id = cbm_odoo_ensure_model_node(ctx->gbuf, model_name);
             if (own_model_id > 0) {
                 models++;
                 if (cbm_gbuf_insert_edge(ctx->gbuf, cls->id, own_model_id, "DEFINES_MODEL", "{}")) {
@@ -102,7 +124,7 @@ void cbm_pipeline_pass_odoo_model(cbm_pipeline_ctx_t *ctx) {
                 if (!parent || !parent[0]) {
                     continue;
                 }
-                int64_t parent_id = ensure_model_node(ctx->gbuf, parent);
+                int64_t parent_id = cbm_odoo_ensure_model_node(ctx->gbuf, parent);
                 if (parent_id <= 0) {
                     continue;
                 }

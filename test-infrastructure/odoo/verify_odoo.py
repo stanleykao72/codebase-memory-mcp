@@ -121,14 +121,13 @@ class Suite:
                         f"create-> {creates}")
 
     def check_B_env_search_resolves(self):
-        """B: request.env['library.book'].search() in controller resolves to library.book."""
-        t = self.trace("list_books")
-        callees = t.get("callees", [])
-        good = [c for c in callees
-                if c.get("name") == "search" and "LibraryBook" in c.get("qualified_name", "")]
-        self.record("B", "env['x'].search resolves to model", "PASS" if good else "PENDING",
-                    good[0]["qualified_name"] if good else
-                    str([c["qualified_name"] for c in callees if c.get("name") == "search"]))
+        """B: request.env['library.book'].search() (base verb, not overridden) →
+        ORM_CALLS edge to the library.book Model node."""
+        r = self.query("MATCH (a)-[:ORM_CALLS]->(m) WHERE m.name = 'library.book' RETURN a.name")
+        rows = r.get("rows", r.get("results", []))
+        ok = any("list_books" in str(row) for row in rows)
+        self.record("B", "env['x'].search → ORM_CALLS Model", "PASS" if ok else "PENDING",
+                    json.dumps(rows)[:160])
 
     def check_C_view_inherit(self):
         """C: inherited view linked to its parent view (inherit_id)."""

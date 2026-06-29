@@ -851,6 +851,9 @@ static int register_and_link_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *d
     if (def->odoo_model_name || def->odoo_inherit_list) {
         cbm_registry_add_model(ctx->registry, def->odoo_model_name, def->qualified_name,
                                def->odoo_inherit_list);
+        /* Pre-create Model nodes during the single-threaded registry phase so the
+         * parallel resolve workers can look them up for ORM_CALLS edges. */
+        cbm_odoo_ensure_models_for_def(ctx->gbuf, def->odoo_model_name, def->odoo_inherit_list);
     }
     char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
     const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
@@ -1820,6 +1823,16 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
                     emit_service_edge(ws->local_edge_buf, source_node, t, call, &orm, module_qn,
                                       rc->registry, rc->main_gbuf, imp_keys, imp_vals, imp_count);
                     ws->calls_resolved++;
+                }
+            } else {
+                /* Base ORM verb not overridden in-project: ORM_CALLS -> Model node
+                 * (pre-created at registry time; looked up read-only here). */
+                char mqn[320];
+                cbm_odoo_model_qn(call->model_name, mqn, sizeof(mqn));
+                const cbm_gbuf_node_t *m = cbm_gbuf_find_by_qn(rc->main_gbuf, mqn);
+                if (m && source_node->id != m->id) {
+                    cbm_gbuf_insert_edge(ws->local_edge_buf, source_node->id, m->id, "ORM_CALLS",
+                                         "{}");
                 }
             }
             continue;

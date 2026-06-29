@@ -483,6 +483,16 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
                 emit_classified_edge(ctx, call, source_node, t, &orm, module_qn, imp_keys, imp_vals,
                                      imp_count);
             }
+        } else {
+            /* Method not overridden in-project (base ORM verb: search/write/...).
+             * Still record that this code touches the model: ORM_CALLS -> Model
+             * node (pre-created at definition time). */
+            char mqn[320];
+            cbm_odoo_model_qn(call->model_name, mqn, sizeof(mqn));
+            const cbm_gbuf_node_t *m = cbm_gbuf_find_by_qn(ctx->gbuf, mqn);
+            if (m && source_node->id != m->id) {
+                cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, m->id, "ORM_CALLS", "{}");
+            }
         }
         return SKIP_ONE;
     }
