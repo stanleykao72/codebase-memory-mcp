@@ -3283,6 +3283,120 @@ static bool extract_config_class_def(CBMExtractCtx *ctx, TSNode node, const char
     return true;
 }
 
+/* Odoo fork (Tier B): dequote a python string literal node's text. Returns a
+ * borrowed/arena string with surrounding ' or " removed, or NULL. */
+static const char *odoo_dequote(CBMArena *a, TSNode str_node, const char *source) {
+    if (ts_node_is_null(str_node) || strcmp(ts_node_type(str_node), "string") != 0) {
+        return NULL;
+    }
+    char *raw = cbm_node_text(a, str_node, source);
+    if (!raw || !raw[0]) {
+        return NULL;
+    }
+    int len = (int)strlen(raw);
+    /* tree-sitter-python string text includes a prefix (e.g. r/u/f) sometimes;
+     * find the first quote and the matching trailing quote. */
+    int s = 0;
+    while (s < len && raw[s] != '\'' && raw[s] != '"') {
+        s++;
+    }
+    if (s >= len) {
+        return NULL;
+    }
+    if (len - s >= 2 && (raw[len - 1] == '\'' || raw[len - 1] == '"')) {
+        return cbm_arena_strndup(a, raw + s + 1, (size_t)(len - s - 2));
+    }
+    return NULL;
+}
+
+#define ODOO_MAX_INHERIT 64
+
+/* Odoo fork (Tier B): read _name / _inherit / _inherits from a Python class
+ * body and populate def->odoo_model_name + def->odoo_inherit_list. No-op for
+ * non-Python. Inheritance names come from _inherit (string or list of strings)
+ * and from _inherits dictionary KEYS (delegation parents). */
+static void extract_odoo_class_attributes(CBMExtractCtx *ctx, TSNode class_node, CBMDefinition *def) {
+    if (ctx->language != CBM_LANG_PYTHON) {
+        return;
+    }
+    TSNode body = find_class_body(class_node, ctx->language);
+    if (ts_node_is_null(body)) {
+        return;
+    }
+    CBMArena *a = ctx->arena;
+    const char *inherits[ODOO_MAX_INHERIT];
+    int nin = 0;
+
+    uint32_t n = ts_node_named_child_count(body);
+    for (uint32_t i = 0; i < n; i++) {
+        TSNode stmt = ts_node_named_child(body, i);
+        /* class body: expression_statement wrapping assignment, or assignment. */
+        TSNode asn = stmt;
+        if (strcmp(ts_node_type(stmt), "expression_statement") == 0 &&
+            ts_node_named_child_count(stmt) > 0) {
+            asn = ts_node_named_child(stmt, 0);
+        }
+        if (ts_node_is_null(asn) || strcmp(ts_node_type(asn), "assignment") != 0) {
+            continue;
+        }
+        TSNode left = ts_node_child_by_field_name(asn, TS_FIELD("left"));
+        TSNode right = ts_node_child_by_field_name(asn, TS_FIELD("right"));
+        if (ts_node_is_null(left) || ts_node_is_null(right)) {
+            continue;
+        }
+        char *lname = cbm_node_text(a, left, ctx->source);
+        if (!lname) {
+            continue;
+        }
+        const char *rkind = ts_node_type(right);
+        if (strcmp(lname, "_name") == 0) {
+            const char *v = odoo_dequote(a, right, ctx->source);
+            if (v && v[0]) {
+                def->odoo_model_name = v;
+            }
+        } else if (strcmp(lname, "_inherit") == 0) {
+            if (strcmp(rkind, "string") == 0) {
+                const char *v = odoo_dequote(a, right, ctx->source);
+                if (v && v[0] && nin < ODOO_MAX_INHERIT) {
+                    inherits[nin++] = v;
+                }
+            } else if (strcmp(rkind, "list") == 0) {
+                uint32_t lc = ts_node_named_child_count(right);
+                for (uint32_t j = 0; j < lc && nin < ODOO_MAX_INHERIT; j++) {
+                    const char *v = odoo_dequote(a, ts_node_named_child(right, j), ctx->source);
+                    if (v && v[0]) {
+                        inherits[nin++] = v;
+                    }
+                }
+            }
+        } else if (strcmp(lname, "_inherits") == 0 && strcmp(rkind, "dictionary") == 0) {
+            uint32_t dc = ts_node_named_child_count(right);
+            for (uint32_t j = 0; j < dc && nin < ODOO_MAX_INHERIT; j++) {
+                TSNode pair = ts_node_named_child(right, j);
+                if (strcmp(ts_node_type(pair), "pair") != 0) {
+                    continue;
+                }
+                const char *v = odoo_dequote(a, ts_node_child_by_field_name(pair, TS_FIELD("key")),
+                                             ctx->source);
+                if (v && v[0]) {
+                    inherits[nin++] = v;
+                }
+            }
+        }
+    }
+
+    if (nin > 0) {
+        const char **arr = (const char **)cbm_arena_alloc(a, (size_t)(nin + 1) * sizeof(char *));
+        if (arr) {
+            for (int k = 0; k < nin; k++) {
+                arr[k] = inherits[k];
+            }
+            arr[nin] = NULL;
+            def->odoo_inherit_list = arr;
+        }
+    }
+}
+
 static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
     CBMArena *a = ctx->arena;
     const char *kind = ts_node_type(node);
@@ -3635,6 +3749,7 @@ static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
     def.base_classes = extract_base_classes(a, node, ctx->source, ctx->language);
     def.decorators = extract_decorators(a, node, ctx->source, ctx->language, spec);
     def.docstring = extract_docstring(a, node, ctx->source, ctx->language);
+    extract_odoo_class_attributes(ctx, node, &def); /* Odoo fork: _name/_inherit/_inherits */
 
     cbm_defs_push(&ctx->result->defs, a, def);
 

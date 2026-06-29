@@ -87,6 +87,15 @@ struct cbm_registry {
      * name-lookup resolver drop cross-language candidates — e.g. a Python
      * `self.env['x'].create()` call must not resolve to a JS `create`. */
     CBMHashTable *lang_of_qn;
+
+    /* Odoo fork (Tier B): model graph indices for ORM call resolution.
+     * model_contributors: modelName → qn_array_t* of Class QNs that declare
+     *   (_name) or extend (_inherit) the model — i.e. classes whose methods
+     *   belong to the model.
+     * model_parents: modelName → qn_array_t* of parent model NAMES from
+     *   _inherit / _inherits (for walking the inheritance chain). */
+    CBMHashTable *model_contributors;
+    CBMHashTable *model_parents;
 };
 
 /* Odoo fork: language-family compatibility for cross-language candidate
@@ -485,6 +494,8 @@ cbm_registry_t *cbm_registry_new(void) {
     r->exact = cbm_ht_create(CBM_SZ_1K);
     r->by_name = cbm_ht_create(CBM_SZ_512);
     r->lang_of_qn = cbm_ht_create(CBM_SZ_1K); /* Odoo fork */
+    r->model_contributors = cbm_ht_create(CBM_SZ_512); /* Odoo fork */
+    r->model_parents = cbm_ht_create(CBM_SZ_512);      /* Odoo fork */
     return r;
 }
 
@@ -527,6 +538,11 @@ void cbm_registry_free(cbm_registry_t *r) {
      * not a heap pointer, so free a key-only walker instead. */
     cbm_ht_foreach(r->lang_of_qn, free_key_only, NULL);
     cbm_ht_free(r->lang_of_qn);
+    /* Odoo fork: model indices hold qn_array_t* values (same shape as by_name). */
+    cbm_ht_foreach(r->model_contributors, free_qn_array, NULL);
+    cbm_ht_free(r->model_contributors);
+    cbm_ht_foreach(r->model_parents, free_qn_array, NULL);
+    cbm_ht_free(r->model_parents);
     free(r);
 }
 
@@ -562,6 +578,116 @@ void cbm_registry_add(cbm_registry_t *r, const char *name, const char *qualified
         cbm_ht_set(r->by_name, strdup(simple), arr);
     }
     cbm_da_push(arr, strdup(qualified_name));
+}
+
+/* ── Odoo fork: model graph index ────────────────────────────────── */
+
+/* Append val to the qn_array stored at ht[key] (creating it), deduping. */
+static void model_index_append(CBMHashTable *ht, const char *key, const char *val) {
+    if (!key || !key[0] || !val || !val[0]) {
+        return;
+    }
+    qn_array_t *arr = cbm_ht_get(ht, key);
+    if (!arr) {
+        arr = calloc(CBM_ALLOC_ONE, sizeof(qn_array_t));
+        if (!arr) {
+            return;
+        }
+        cbm_ht_set(ht, strdup(key), arr);
+    }
+    for (int i = 0; i < arr->count; i++) {
+        if (strcmp(arr->items[i], val) == 0) {
+            return; /* dedup */
+        }
+    }
+    cbm_da_push(arr, strdup(val));
+}
+
+void cbm_registry_add_model(cbm_registry_t *r, const char *model_name, const char *class_qn,
+                            const char **inherit_list) {
+    if (!r || !class_qn) {
+        return;
+    }
+    /* A class with an explicit _name contributes to that model. */
+    if (model_name && model_name[0]) {
+        model_index_append(r->model_contributors, model_name, class_qn);
+    }
+    /* Each _inherit/_inherits target: this class also contributes to that model
+     * (extension), and — when the class has its own _name — records a parent
+     * link _name -> target for chain walking. A pure-extension class (no _name)
+     * just adds itself as a contributor of the inherited model. */
+    if (inherit_list) {
+        for (int i = 0; inherit_list[i]; i++) {
+            const char *parent = inherit_list[i];
+            model_index_append(r->model_contributors, parent, class_qn);
+            if (model_name && model_name[0] && strcmp(model_name, parent) != 0) {
+                model_index_append(r->model_parents, model_name, parent);
+            }
+        }
+    }
+}
+
+cbm_resolution_t cbm_registry_resolve_orm(const cbm_registry_t *r, const char *model_name,
+                                          const char *method_name) {
+    if (!r || !model_name || !model_name[0] || !method_name || !method_name[0]) {
+        return empty_result();
+    }
+    /* The caller's callee_name may be the full receiver chain
+     * (self.env['x'].method); reduce to the bare method name. */
+    method_name = simple_name(method_name);
+    /* BFS over the model + its _inherit parents (cycle-guarded). For each model,
+     * probe every contributor class for an exact "<class_qn>.<method>" def. */
+    const char *queue[REG_MAX_CANDIDATES];
+    const char *seen[REG_MAX_CANDIDATES];
+    int qhead = 0, qtail = 0, nseen = 0;
+    queue[qtail++] = model_name;
+    seen[nseen++] = model_name;
+
+    while (qhead < qtail) {
+        const char *model = queue[qhead++];
+        qn_array_t *contribs = cbm_ht_get(r->model_contributors, model);
+        if (contribs) {
+            for (int i = 0; i < contribs->count; i++) {
+                char probe[CBM_SZ_512];
+                snprintf(probe, sizeof(probe), "%s.%s", contribs->items[i], method_name);
+                const char *label = cbm_ht_get(r->exact, probe);
+                if (label) {
+                    /* exact key is heap-owned by the registry; return a stable ptr */
+                    const char *qn = NULL;
+                    qn_array_t *byn = cbm_ht_get(r->by_name, simple_name(probe));
+                    if (byn) {
+                        for (int k = 0; k < byn->count; k++) {
+                            if (strcmp(byn->items[k], probe) == 0) {
+                                qn = byn->items[k];
+                                break;
+                            }
+                        }
+                    }
+                    if (qn) {
+                        return (cbm_resolution_t){qn, "odoo_orm", CONF_SAME_MODULE, REG_RESOLVED};
+                    }
+                }
+            }
+        }
+        qn_array_t *parents = cbm_ht_get(r->model_parents, model);
+        if (parents) {
+            for (int i = 0; i < parents->count && qtail < REG_MAX_CANDIDATES; i++) {
+                const char *p = parents->items[i];
+                bool dup = false;
+                for (int s = 0; s < nseen; s++) {
+                    if (strcmp(seen[s], p) == 0) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup && nseen < REG_MAX_CANDIDATES) {
+                    seen[nseen++] = p;
+                    queue[qtail++] = p;
+                }
+            }
+        }
+    }
+    return empty_result();
 }
 
 /* ── Lookup ──────────────────────────────────────────────────────── */
