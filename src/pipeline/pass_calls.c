@@ -469,8 +469,11 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
         }
     }
 
-    cbm_resolution_t res = cbm_registry_resolve(ctx->registry, call->callee_name, module_qn,
-                                                imp_keys, imp_vals, imp_count);
+    /* Odoo fork: scope candidates to the calling file's language so a Python
+     * ORM call (create/search/write/...) never resolves to a same-named JS/XML
+     * node. lang is this file's CBMLanguage. */
+    cbm_resolution_t res = cbm_registry_resolve_lang(ctx->registry, call->callee_name, module_qn,
+                                                     imp_keys, imp_vals, imp_count, (int)lang);
     if (!res.qualified_name || res.qualified_name[0] == '\0') {
         /* Resolution is empty when the callee belongs to an EXTERNAL client
          * library whose source is not in the indexed tree (e.g. `requests.get`,

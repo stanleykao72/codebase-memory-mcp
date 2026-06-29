@@ -23,6 +23,7 @@ enum { PD_JSON_FIELD_OVERHEAD = 6 };
 #include "foundation/log.h"
 #include "foundation/compat.h"
 #include "cbm.h"
+#include "discover/discover.h" /* cbm_language_for_filename (Odoo fork) */
 #include "simhash/minhash.h"
 #include "semantic/ast_profile.h"
 
@@ -307,7 +308,9 @@ static void process_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *def, const
         (strcmp(def->label, "Function") == 0 || strcmp(def->label, "Method") == 0 ||
          cbm_label_is_type_like(def->label) || strcmp(def->label, "Variable") == 0 ||
          strcmp(def->label, "Field") == 0)) {
-        cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label);
+        const char *dpath = def->file_path ? def->file_path : rel;
+        cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label,
+                         dpath ? (int)cbm_language_for_filename(dpath) : CBM_LANG_COUNT);
     }
     char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
     const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);

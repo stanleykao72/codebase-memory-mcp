@@ -527,7 +527,9 @@ static void registry_visitor(const cbm_gbuf_node_t *node, void *userdata) {
     if (!incr_label_is_registry_symbol(node->label)) {
         return;
     }
-    cbm_registry_add(r, node->name, node->qualified_name, node->label);
+    cbm_registry_add(r, node->name, node->qualified_name, node->label,
+                     node->file_path ? (int)cbm_language_for_filename(node->file_path)
+                                     : CBM_LANG_COUNT);
 }
 
 /* Run parallel or sequential extract+resolve for changed files. */
