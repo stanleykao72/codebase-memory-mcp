@@ -194,6 +194,13 @@ typedef struct {
     const char **return_types; // NULL-terminated array (NULL if none)
     const char *route_path;    // HTTP route path from decorator (e.g., "/api/users") or NULL
     const char *route_method;  // HTTP method from decorator (e.g., "POST") or NULL
+    /* Odoo fork (Tier B): class-body attributes _name / _inherit / _inherits.
+     * odoo_model_name = value of _name (the model this class declares) or NULL.
+     * odoo_inherit_list = NULL-terminated array of model names from _inherit
+     * (string or list) plus _inherits keys, or NULL. A class with only _inherit
+     * EXTENDS that model and has no own _name. */
+    const char *odoo_model_name;
+    const char **odoo_inherit_list;
     int complexity;            // cyclomatic complexity
     int cognitive;             // cognitive complexity (nesting-weighted)
     int loop_count;            // number of loop constructs in the body
@@ -237,6 +244,10 @@ typedef struct {
     int branch_depth;                   // enclosing branch nesting at the call site
     int start_line;                     // 1-based source line of the call (for def range-match)
     bool is_method;                     // Perl-only: arrow/method call ($obj->m). Default false.
+    /* Odoo fork (Tier B): model name from a self.env['x'] / request.env['x']
+     * subscript receiver (dequoted), or NULL. Drives ORM call resolution so
+     * `self.env['hr.leave'].create()` resolves to hr.leave's create. */
+    const char *model_name;
 } CBMCall;
 
 typedef struct {

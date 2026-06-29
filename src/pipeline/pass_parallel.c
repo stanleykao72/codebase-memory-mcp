@@ -300,6 +300,9 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
     append_json_string(buf, bufsize, &pos, "parent_class", def->parent_class);
     append_json_str_array(buf, bufsize, &pos, "decorators", def->decorators);
     append_json_str_array(buf, bufsize, &pos, "base_classes", def->base_classes);
+    /* Odoo fork (Tier B) — KEEP IN SYNC with pass_definitions.c build_def_props. */
+    append_json_string(buf, bufsize, &pos, "odoo_model_name", def->odoo_model_name);
+    append_json_str_array(buf, bufsize, &pos, "odoo_inherit_list", def->odoo_inherit_list);
     append_json_str_array(buf, bufsize, &pos, "param_names", def->param_names);
     append_json_str_array(buf, bufsize, &pos, "param_types", def->param_types);
     append_json_string(buf, bufsize, &pos, "route_path", def->route_path);
@@ -843,6 +846,11 @@ static int register_and_link_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *d
         cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label,
                          dpath ? (int)cbm_language_for_filename(dpath) : CBM_LANG_COUNT);
         (*reg_entries)++;
+    }
+    /* Odoo fork (Tier B): model index — KEEP IN SYNC with pass_definitions.c. */
+    if (def->odoo_model_name || def->odoo_inherit_list) {
+        cbm_registry_add_model(ctx->registry, def->odoo_model_name, def->qualified_name,
+                               def->odoo_inherit_list);
     }
     char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
     const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
@@ -1796,6 +1804,24 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
         atomic_fetch_add_explicit(&rc->time_ns_rc_source, extract_now_ns() - _rc_t0,
                                   memory_order_relaxed);
         if (!source_node) {
+            continue;
+        }
+
+        /* Odoo fork (Tier B): ORM call self.env['model'].method() — resolve to
+         * the method on that model's class chain. Mirrors pass_calls.c. If the
+         * model defines the method, emit the precise edge; otherwise drop (don't
+         * fall through to bare-name guessing). */
+        if (lang == CBM_LANG_PYTHON && call->model_name && call->model_name[0]) {
+            cbm_resolution_t orm =
+                cbm_registry_resolve_orm(rc->registry, call->model_name, call->callee_name);
+            if (orm.qualified_name && orm.qualified_name[0]) {
+                const cbm_gbuf_node_t *t = cbm_gbuf_find_by_qn(rc->main_gbuf, orm.qualified_name);
+                if (t && source_node->id != t->id) {
+                    emit_service_edge(ws->local_edge_buf, source_node, t, call, &orm, module_qn,
+                                      rc->registry, rc->main_gbuf, imp_keys, imp_vals, imp_count);
+                    ws->calls_resolved++;
+                }
+            }
             continue;
         }
 

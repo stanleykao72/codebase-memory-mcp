@@ -515,6 +515,11 @@ int cbm_pipeline_pass_semantic_edges(cbm_pipeline_ctx_t *ctx);
  * cycles (recursive). Runs on the graph buffer before the dump. */
 void cbm_pipeline_pass_complexity(cbm_pipeline_ctx_t *ctx);
 
+/* ── Odoo model graph (pass_odoo_model.c, Odoo fork Tier B) ───────── */
+/* Builds Model nodes + DEFINES_MODEL / INHERITS_MODEL edges from the
+ * odoo_model_name / odoo_inherit_list properties on Class nodes. Predump. */
+void cbm_pipeline_pass_odoo_model(cbm_pipeline_ctx_t *ctx);
+
 /* ── Env URL scanner (pass_envscan.c) ────────────────────────────── */
 
 typedef struct {

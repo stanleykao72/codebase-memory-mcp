@@ -49,8 +49,18 @@ class LibraryMember(models.Model):
         return super().create(vals_list)
 
 
+class LibraryBookArchive(models.Model):
+    # Prototype inheritance: a NEW model that inherits from library.book
+    # → expect INHERITS_MODEL: library.book.archive -> library.book
+    _name = 'library.book.archive'
+    _inherit = 'library.book'
+
+    archived_on = fields.Date()
+
+
 class ResPartnerLibrary(models.Model):
-    # Inheritance: extends an external core model
+    # Extension inheritance: extends an external core model (no own _name)
+    # → expect DEFINES_MODEL: ResPartnerLibrary -> res.partner
     _inherit = 'res.partner'
 
     loan_count = fields.Integer(compute='_compute_loan_count')

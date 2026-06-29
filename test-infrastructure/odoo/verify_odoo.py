@@ -90,13 +90,21 @@ class Suite:
                         f"have={sorted(names)[:8]} want={sorted(want)}")
 
     def check_B_inherits(self):
-        """B: _inherit='res.partner' yields an INHERITS edge to res.partner model."""
-        r = self.query("MATCH (a)-[:INHERITS]->(b) WHERE b.name = 'res.partner' RETURN a.name")
+        """B: prototype inheritance (_name + _inherit) yields INHERITS_MODEL edge."""
+        r = self.query("MATCH (a)-[:INHERITS_MODEL]->(b) WHERE b.name = 'library.book' "
+                       "RETURN a.name, b.name")
         rows = r.get("rows", r.get("results", []))
-        if rows:
-            self.record("B", "INHERITS edge from _inherit", "PASS", json.dumps(rows)[:120])
-        else:
-            self.record("B", "INHERITS edge from _inherit", "PENDING", json.dumps(r)[:160])
+        ok = any("library.book.archive" in str(row) for row in rows)
+        self.record("B", "INHERITS_MODEL edge (_name+_inherit)", "PASS" if ok else "PENDING",
+                    json.dumps(rows)[:160])
+
+    def check_B_extension(self):
+        """B: extension (_inherit only) yields DEFINES_MODEL to the extended model."""
+        r = self.query("MATCH (a)-[:DEFINES_MODEL]->(m) WHERE m.name = 'res.partner' RETURN a.name")
+        rows = r.get("rows", r.get("results", []))
+        ok = any("ResPartnerLibrary" in str(row) for row in rows)
+        self.record("B", "DEFINES_MODEL edge (_inherit extension)", "PASS" if ok else "PENDING",
+                    json.dumps(rows)[:160])
 
     def check_B_env_create_resolves(self):
         """B: self.env['library.member'].create() resolves to library.member's create."""
@@ -137,7 +145,7 @@ class Suite:
     def run(self, tier):
         checks = {
             "A": [self.check_A_no_cross_lang],
-            "B": [self.check_B_model_nodes, self.check_B_inherits,
+            "B": [self.check_B_model_nodes, self.check_B_inherits, self.check_B_extension,
                   self.check_B_env_create_resolves, self.check_B_env_search_resolves],
             "C": [self.check_C_view_inherit, self.check_C_view_model_link],
         }

@@ -1866,6 +1866,53 @@ static void extract_java_method_reference(CBMExtractCtx *ctx, TSNode node, const
     cbm_calls_push(&ctx->result->calls, ctx->arena, call);
 }
 
+/* Odoo fork (Tier B): for a Python call whose receiver is an env subscript
+ * (self.env['model'] / request.env['model'] / cls.env['model']), return the
+ * dequoted model name. NULL for any other shape. Only literal string indices
+ * are accepted (env[var] is skipped to avoid false positives). */
+static const char *extract_python_env_model(CBMExtractCtx *ctx, TSNode call_node) {
+    TSNode func = ts_node_child_by_field_name(call_node, TS_FIELD("function"));
+    if (ts_node_is_null(func) || strcmp(ts_node_type(func), "attribute") != 0) {
+        return NULL;
+    }
+    /* receiver of the method call (the part before `.method`) */
+    TSNode recv = ts_node_child_by_field_name(func, TS_FIELD("object"));
+    if (ts_node_is_null(recv) && ts_node_named_child_count(func) > 0) {
+        recv = ts_node_named_child(func, 0);
+    }
+    if (ts_node_is_null(recv) || strcmp(ts_node_type(recv), "subscript") != 0) {
+        return NULL;
+    }
+    /* subscript: value (the env accessor) + subscript (the index) */
+    TSNode base = ts_node_child_by_field_name(recv, TS_FIELD("value"));
+    if (ts_node_is_null(base) && ts_node_named_child_count(recv) > 0) {
+        base = ts_node_named_child(recv, 0);
+    }
+    TSNode idx = ts_node_child_by_field_name(recv, TS_FIELD("subscript"));
+    if (ts_node_is_null(idx) && ts_node_named_child_count(recv) > 1) {
+        idx = ts_node_named_child(recv, 1);
+    }
+    if (ts_node_is_null(base) || ts_node_is_null(idx)) {
+        return NULL;
+    }
+    if (strcmp(ts_node_type(idx), "string") != 0) {
+        return NULL; /* env[var] — not a literal model name */
+    }
+    char *btext = cbm_node_text(ctx->arena, base, ctx->source);
+    if (!btext) {
+        return NULL;
+    }
+    size_t bl = strlen(btext);
+    /* receiver must be an env accessor: text ends with "env" (self.env,
+     * request.env, cls.env). */
+    if (bl < 3 || strcmp(btext + bl - 3, "env") != 0) {
+        return NULL;
+    }
+    char *raw = cbm_node_text(ctx->arena, idx, ctx->source);
+    const char *m = strip_quotes(ctx->arena, raw);
+    return (m && m[0]) ? m : NULL;
+}
+
 void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, WalkState *state) {
     if (!spec->call_node_types || !spec->call_node_types[0]) {
         return;
@@ -1900,6 +1947,12 @@ void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Walk
                     call.second_arg_name = extract_handler_arg(ctx, args);
                 }
                 extract_call_args(ctx, args, &call);
+            }
+
+            /* Odoo fork (Tier B): capture self.env['model'] receiver so call
+             * resolution can target the model's method, not a bare-name guess. */
+            if (ctx->language == CBM_LANG_PYTHON) {
+                call.model_name = extract_python_env_model(ctx, node);
             }
 
             cbm_calls_push(&ctx->result->calls, ctx->arena, call);
